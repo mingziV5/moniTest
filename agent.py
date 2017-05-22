@@ -1,4 +1,6 @@
 #!/usr/bin/python
+#coding:utf-8
+
 import Queue
 import threading
 import time
@@ -33,17 +35,21 @@ class porterThread (threading.Thread):
 
     def put_data(self):
         m = mon()
-        #atime=int(time.time())
+        atime=int(time.time())
         while 1:
             if not self.q_to_collect.empty():
-                data,evt = self.q_to_collect.get()
-                atime = data['atime']
-                del(data['atime'])
+                data = self.q_to_collect.get()
+                #atime = data['atime']
+                #del(data['atime'])
                 data.update(m.runAllGet())
-                self.q_to_send.put(data)
-                btime = int(time.time())
-                time.sleep(self.interval-((btime-atime)%self.interval))
-                evt.set()
+            else:
+                data = m.runAllGet()
+ 
+            self.q_to_send.put(data)
+            btime = int(time.time())
+            time.sleep(self.interval-((btime-atime)%self.interval))
+            
+            #evt.set()用于线程间同步将flag设置为true
             #data = m.runAllGet()
             #print data 
             #self.queueLock.acquire()
@@ -57,11 +63,18 @@ class porterThread (threading.Thread):
         m = mon()
         atime = int(time.time())
         while True:
-            evt = threading.Event()
             data = m.userDefineMon()
-            data.update({'atime':atime})
-            self.q_to_collect.put((data,evt))
-            evt.wait()
+            self.q_to_collect.put(data)
+            time.sleep(4)
+            btime = int(time.time())
+            time.sleep(self.interval-((btime-atime)%self.interval))
+
+            #Event 用于put_user_data 和 put_data 线程间同步
+            #evt = threading.Event()
+            #data = m.userDefineMon()
+            #data.update({'atime':atime})
+            #self.q_to_collect.put(data)
+            #evt.wait()等待flag信号
             
     def get_data(self):
         while 1:
@@ -78,7 +91,7 @@ class porterThread (threading.Thread):
 def startTh():
     q1 = Queue.Queue(10)
     q2 = Queue.Queue(10)
-    user_collect = porterThread(name='user',q_to_collect=q1)
+    user_collect = porterThread(name='user',q_to_collect=q1, interval=3)
     collect = porterThread(name='collect', q_to_collect=q1, q_to_send=q2, interval=3)
     user_collect.start()
     collect.start()
