@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
+# 所有内容加上注释，改成多线程或者多进程模式
 
 from daemon import Daemon
 import socket
