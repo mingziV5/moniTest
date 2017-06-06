@@ -1,6 +1,34 @@
 #!/usr/bin/env python
 # coding: utf-8
 # 所有内容加上注释，改成多线程或者多进程模式
+'''
+class STATE:
+    def __init__(self):
+        self.state = "accept"
+        self.have_read = 0
+        self.need_read = 10
+        self.have_write = 0
+        self.need_write = 0
+        self.buff_write = ""
+        self.buff_read = ""
+        # sock_obj is a object
+        self.sock_obj = ""
+        self.popen_pipe = 0
+
+    def printState(self):
+        if DEBUG:
+            dbgPrint('\n - current state of fd: %d' % self.sock_obj.fileno())
+            dbgPrint(" - - state: %s" % self.state)
+            dbgPrint(" - - have_read: %s" % self.have_read)
+            dbgPrint(" - - need_read: %s" % self.need_read)
+            dbgPrint(" - - have_write: %s" % self.have_write)
+            dbgPrint(" - - need_write: %s" % self.need_write)
+            dbgPrint(" - - buff_write: %s" % self.buff_write)
+            dbgPrint(" - - buff_read:  %s" % self.buff_read)
+            dbgPrint(" - - sock_obj:   %s" % self.sock_obj)
+
+'''
+
 
 from daemon import Daemon
 import socket
@@ -18,8 +46,12 @@ class nbNetBase:
     def setFd(self, sock):
         """sock is class object of socket"""
         #dbgPrint("\n -- setFd start!")
+        #申明一个STATE对象,STATE类见注释或nbNetUtils
+        #默认state=‘accpet’
         tmp_state = STATE()
+        #传入socket对象，完成初始化
         tmp_state.sock_obj = sock
+        #将申明的stat对象放入conn_state字典
         self.conn_state[sock.fileno()] = tmp_state
         #self.conn_state[sock.fileno()].printState()
         #dbgPrint("\n -- setFd end!")
@@ -27,11 +59,15 @@ class nbNetBase:
     def accept(self, fd): 
         """fd is fileno() of socket"""
         #dbgPrint("\n -- accept start!")
+        #从conn_state字典中获取stat对象
         sock_state = self.conn_state[fd]
+        #从stat对象中获取socket对象
         sock = sock_state.sock_obj
+        #接收新的连接
         conn, addr = sock.accept()
-        # set to non-blocking: 0
+        # set to non-blocking: 0，非阻塞模式
         conn.setblocking(0)
+        #返回连接
         return conn
     
     def close(self, fd):
@@ -57,20 +93,29 @@ class nbNetBase:
         try:
             sock_state = self.conn_state[fd]
             conn = sock_state.sock_obj
+            #如果需要读的内容已经读完，触发一个异常
             if sock_state.need_read <= 0:
                 raise socket.error
-
+            #读10字节
             one_read = conn.recv(sock_state.need_read)
             #dbgPrint("\tread func fd: %d, one_read: %s, need_read: %d" % (fd, one_read, sock_state.need_read))
+            #如果没有读到内容，触发一个异常
             if len(one_read) == 0:
                 raise socket.error
             # process received data
+            #将一次读到的存入对象变量
             sock_state.buff_read += one_read
+            #处理已读和未读的字节数
             sock_state.have_read += len(one_read)
             sock_state.need_read -= len(one_read)
             #sock_state.printState()
 
             # read protocol header
+            '''
+            定义一个协议头十个字节表示协议长度，判断协议头是否读完，读完将头十个字节转换为int
+            如果int为0，或者小于0，表示协议体数据为空或者出错，触发异常
+            正常大于0，将need_read设置为协议头定义的字节大小，清空buff
+            '''
             if sock_state.have_read == 10:
                 header_said_need_read = int(sock_state.buff_read)
                 if header_said_need_read <= 0:
@@ -137,40 +182,52 @@ class nbNetBase:
             #for i in self.conn_state.iterkeys():
                 #dbgPrint("\n - state of fd: %d" % i)
                 #self.conn_state[i].printState()
-
+            #查询epoll对象，看是否有关注的event被触发
             epoll_list = self.epoll_sock.poll()
+            #epoll_list是作为一个元组的列表返回（fileno,event code）
             for fd, events in epoll_list:
                 #dbgPrint('\n-- run epoll return fd: %d. event: %s' % (fd, events))
                 print self.conn_state
                 print fd, events
+                #通过conn_state字典查询被触发的socket状态
                 sock_state = self.conn_state[fd]
+                #判断是否是HUP事件，如果是将state置成“closing”
                 if select.EPOLLHUP & events:
                     #dbgPrint("EPOLLHUP")
                     sock_state.state = "closing"
+                #判断是否是ERR事件，如果是将state置成“closing”
                 elif select.EPOLLERR & events:
                     #dbgPrint("EPOLLERR")
                     sock_state.state = "closing"
+                #排除HUP和ERR事件后，将fd放入stat_machine
                 self.state_machine(fd)
 
     def state_machine(self, fd):
         #time.sleep(0.1)
         #dbgPrint("\n - state machine: fd: %d, status: %s" % (fd, self.conn_state[fd].state))
+        #获取socket_state的状态
         sock_state = self.conn_state[fd]
+        #通过socket_state的状态，从socket method字典中获取对应的方法
         self.sm[sock_state.state](fd)
 
 class nbNet(nbNetBase):
     def __init__(self, addr, port, logic):
         #dbgPrint('\n__init__: start!')
+        #初始化存放stat对象的字典，key是fileno
         self.conn_state = {}
+        #初始化一个socket，监听连接
         self.listen_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         self.listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listen_sock.bind((addr, port))
         self.listen_sock.listen(10)
+        #将listen_sock对象放入conn_state字典
         self.setFd(self.listen_sock)
+        #初始化epoll，注册EPOLLIN事件
         self.epoll_sock = select.epoll()
         # LT for default, ET add ' | select.EPOLLET '
         self.epoll_sock.register(self.listen_sock.fileno(), select.EPOLLIN )
         self.logic = logic
+        #socket method字典，状态和方法对应
         self.sm = {
             "accept" : self.accept2read,
             "read"   : self.read2process,
@@ -183,6 +240,7 @@ class nbNet(nbNetBase):
     #@profile
     def process(self, fd):
         sock_state = self.conn_state[fd]
+        #逻辑处理函数
         response = self.logic(fd, sock_state.buff_read)
         #pdb.set_trace()
         if response == None:
@@ -202,10 +260,13 @@ class nbNet(nbNetBase):
 
     #@profile
     def accept2read(self, fd):
+        #从accept中获取新的连接
         conn = self.accept(fd)
+        #将新的连接注册为EPOLLIN
         self.epoll_sock.register(conn.fileno(), select.EPOLLIN)
-        # new client connection fd be initilized 
+        # new client connection fd be initilized 将新连接初始化为stat对象放入conn_state字典
         self.setFd(conn)
+        # 将新初始化的stat对象的state置为‘read’
         self.conn_state[conn.fileno()].state = "read"
         # now end of accept, but the main process still on 'accept' status
         # waiting for new client to connect it.
@@ -217,6 +278,7 @@ class nbNet(nbNetBase):
         #pdb.set_trace()
         read_ret = ""
         try:
+            #调用read方法，获取read返回状态
             read_ret = self.read(fd)
         except (Exception), msg:
             #dbgPrint(msg)
@@ -248,6 +310,7 @@ class nbNet(nbNetBase):
         if write_ret == "writemore":
             pass
         elif write_ret == "writecomplete":
+            #写完成，重新将socket注册成EPOLLIN，state设置成'read'
             sock_state = self.conn_state[fd]
             conn = sock_state.sock_obj
             self.setFd(conn)
